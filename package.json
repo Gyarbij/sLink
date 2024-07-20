@@ -18,5 +18,5 @@
     "jsonschema": "^1.4.1",
     "nanoid": "^4.0.0"
   },
-  "description": "A simple link shortener",
+  "description": "A simple link shortener"
 }
