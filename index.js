@@ -4,16 +4,38 @@ import path from "path";
 import { fileURLToPath } from "url";
 import cors from "cors";
 import dotenv from "dotenv";
+import sqlite3 from 'sqlite3';
+import { open } from 'sqlite';
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
 const app = express();
 const notallowed = ["dashboard", "list", ".html"];
 const port = parseInt(process.env.PORT) || 36;
 
-// In-memory store for short links
-let db = {};
+// SQLite database setup
+let db;
+
+async function setupDatabase() {
+  db = await open({
+    filename: 'slink.db',
+    driver: sqlite3.Database
+  });
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS links (
+      id TEXT PRIMARY KEY,
+      original_link TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      clicks INTEGER DEFAULT 0
+    )
+  `);
+}
+
+setupDatabase();
 
 app.use(express.static(path.join(__dirname, "public")));
 app.use((req, res, next) => {
@@ -43,34 +65,49 @@ app.get("/dashboard/list", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "/dashboard/list.html"));
 });
 
-app.get("/:id", (req, res) => {
+app.get("/:id", async (req, res) => {
   const id = req.params.id;
-  const item = db[id];
+  const item = await db.get('SELECT * FROM links WHERE id = ?', id);
   if (!item) {
     res.sendFile(path.join(__dirname, "public", "404.html"));
   } else {
-    item.stats.clicks++;
+    await db.run('UPDATE links SET clicks = clicks + 1 WHERE id = ?', id);
     res.redirect(item.original_link);
   }
 });
 
-app.get("/api/list", (req, res) => {
+app.get("/api/list", async (req, res) => {
   const limit = req.query.l || 5;
-  const items = Object.values(db).slice(0, limit);
-  res.status(200).json(items);
+  const items = await db.all('SELECT * FROM links LIMIT ?', limit);
+  const count = await db.get('SELECT COUNT(*) as count FROM links');
+  
+  const formattedItems = items.map(item => ({
+    key: item.id, // Using id as key since that's what your frontend expects
+    id: item.id,
+    original_link: item.original_link,
+    created_at: item.created_at,
+    stats: {
+      clicks: item.clicks
+    }
+  }));
+
+  res.status(200).json({
+    items: formattedItems,
+    count: count.count
+  });
 });
 
-app.delete("/api/delete/:id", (req, res) => {
+app.delete("/api/delete/:id", async (req, res) => {
   const id = req.params.id;
-  if (db[id]) {
-    delete db[id];
+  const result = await db.run('DELETE FROM links WHERE id = ?', id);
+  if (result.changes > 0) {
     res.status(200).json({ status: "200", message: "delete item successfully" });
   } else {
     res.status(404).json({ status: "404", message: "item could not be found" });
   }
 });
 
-app.post("/api/update/:id", (req, res) => {
+app.post("/api/update/:id", async (req, res) => {
   const data = req.body;
   const idparam = req.params.id;
   const v = new _Validator();
@@ -87,12 +124,12 @@ app.post("/api/update/:id", (req, res) => {
   if (result.errors.length > 0 || !isValidURL(data.original_link) || notallowed.includes(data.id) || ifslash.test(data.id)) {
     res.status(400).json({ status: 400, message: "bad request" });
   } else {
-    db[idparam] = { ...db[idparam], ...data };
+    await db.run('UPDATE links SET original_link = ? WHERE id = ?', [data.original_link, idparam]);
     res.status(200).json({ status: 200, message: "updated successfully", short_link: `${req.protocol}://${req.get("host")}/${data.id}` });
   }
 });
 
-app.post("/api/create", (req, res) => {
+app.post("/api/create", async (req, res) => {
   const data = req.body;
   const v = new _Validator();
   const schema = {
@@ -100,17 +137,16 @@ app.post("/api/create", (req, res) => {
     properties: {
       original_link: { type: "string" },
       id: { type: "string" },
-      stats: { type: "object", properties: { clicks: { type: "number" }, created_at: { type: "string" } } },
     },
     required: ["original_link"],
   };
   const resid = !data.id ? Math.random().toString(36).substr(2, 7) : data.id;
-  const result = v.validate({ ...data, id: resid, created_at: new Date().toJSON(), stats: { clicks: 0 } }, schema);
+  const result = v.validate({ ...data, id: resid }, schema);
   const ifslash = /\/\w+/;
   if (result.errors.length > 0 || !isValidURL(data.original_link) || notallowed.includes(resid) || ifslash.test(data.id)) {
     res.status(400).json({ status: 400, message: "bad request" });
   } else {
-    db[resid] = { original_link: data.original_link, id: resid, created_at: new Date().toJSON(), stats: { clicks: 0 } };
+    await db.run('INSERT INTO links (id, original_link, created_at, clicks) VALUES (?, ?, ?, 0)', [resid, data.original_link, new Date().toJSON()]);
     res.status(200).json({ status: 200, short_link: `${req.protocol}://${req.get("host")}/${resid}` });
   }
 });
