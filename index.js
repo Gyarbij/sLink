@@ -16,6 +16,29 @@ const app = express();
 const notallowed = ["dashboard", "list", ".html"];
 const port = parseInt(process.env.PORT) || 36;
 
+// Rate limiter setup
+const WINDOW_SIZE_IN_SECONDS = 60;
+const MAX_REQUESTS_PER_WINDOW = 10;
+const rateLimitStore = new Map();
+
+function rateLimiter(req, res, next) {
+  const ip = req.ip;
+  const now = Date.now();
+  const windowStart = now - (WINDOW_SIZE_IN_SECONDS * 1000);
+
+  const requestTimestamps = rateLimitStore.get(ip) || [];
+  const requestsInWindow = requestTimestamps.filter(timestamp => timestamp > windowStart);
+
+  if (requestsInWindow.length >= MAX_REQUESTS_PER_WINDOW) {
+    return res.status(429).json({ status: 429, message: "Too many requests, please try again later." });
+  }
+
+  requestTimestamps.push(now);
+  rateLimitStore.set(ip, requestTimestamps);
+
+  next();
+}
+
 // SQLite database setup
 let db;
 
@@ -69,7 +92,7 @@ app.get("/dashboard/list", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "/dashboard/list.html"));
 });
 
-app.get("/:id", async (req, res) => {
+app.get("/:id", rateLimiter, async (req, res) => {
   try {
     const id = req.params.id;
     const item = await db.get('SELECT * FROM links WHERE id = ?', id);
@@ -85,7 +108,7 @@ app.get("/:id", async (req, res) => {
   }
 });
 
-app.get("/api/list", async (req, res) => {
+app.get("/api/list", rateLimiter, async (req, res) => {
   try {
     const limit = req.query.l || 5;
     const items = await db.all('SELECT * FROM links LIMIT ?', limit);
@@ -111,7 +134,7 @@ app.get("/api/list", async (req, res) => {
   }
 });
 
-app.delete("/api/delete/:id", async (req, res) => {
+app.delete("/api/delete/:id", rateLimiter, async (req, res) => {
   try {
     const id = req.params.id;
     const result = await db.run('DELETE FROM links WHERE id = ?', id);
@@ -126,7 +149,7 @@ app.delete("/api/delete/:id", async (req, res) => {
   }
 });
 
-app.post("/api/update/:id", async (req, res) => {
+app.post("/api/update/:id", rateLimiter, async (req, res) => {
   try {
     const data = req.body;
     const idparam = req.params.id;
@@ -153,7 +176,7 @@ app.post("/api/update/:id", async (req, res) => {
   }
 });
 
-app.post("/api/create", async (req, res) => {
+app.post("/api/create", rateLimiter, async (req, res) => {
   try {
     const data = req.body;
     const v = new _Validator();
