@@ -162,6 +162,7 @@ app.post("/api/create", async (req, res) => {
       properties: {
         original_link: { type: "string" },
         id: { type: "string" },
+        action: { type: "string" },  // New field for handling existing ID
       },
       required: ["original_link"],
     };
@@ -172,14 +173,39 @@ app.post("/api/create", async (req, res) => {
       res.status(400).json({ status: 400, message: "bad request" });
     } else {
       try {
-        await db.run('INSERT INTO links (id, original_link, created_at, clicks) VALUES (?, ?, ?, 0)', [resid, data.original_link, new Date().toJSON()]);
-        res.status(200).json({ status: 200, short_link: `${req.protocol}://${req.get("host")}/${resid}` });
-      } catch (dbError) {
-        if (dbError.code === 'SQLITE_CONSTRAINT') {
-          res.status(400).json({ status: 400, message: "ID already exists" });
+        // Check if the ID already exists
+        const existingLink = await db.get('SELECT * FROM links WHERE id = ?', resid);
+        
+        if (existingLink) {
+          if (data.action === 'modify') {
+            // If action is 'modify', update the existing link
+            await db.run('UPDATE links SET original_link = ? WHERE id = ?', [data.original_link, resid]);
+            res.status(200).json({ 
+              status: 200, 
+              message: "Link updated successfully", 
+              short_link: `${req.protocol}://${req.get("host")}/${resid}` 
+            });
+          } else {
+            // If no action specified, return a warning
+            res.status(409).json({ 
+              status: 409, 
+              message: "ID already exists", 
+              existingLink: existingLink.original_link,
+              options: ['cancel', 'modify']
+            });
+          }
         } else {
-          throw dbError;  // Re-throw if it's not a constraint error
+          // If ID doesn't exist, create a new link
+          await db.run('INSERT INTO links (id, original_link, created_at, clicks) VALUES (?, ?, ?, 0)', [resid, data.original_link, new Date().toJSON()]);
+          res.status(200).json({ 
+            status: 200, 
+            message: "Link created successfully", 
+            short_link: `${req.protocol}://${req.get("host")}/${resid}` 
+          });
         }
+      } catch (dbError) {
+        console.error('Database error:', dbError);
+        res.status(500).json({ status: 500, message: "Internal server error" });
       }
     }
   } catch (error) {
