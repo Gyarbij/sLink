@@ -1,0 +1,2 @@
+# slink
+ Shortlink generator
