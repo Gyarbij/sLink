@@ -2,6 +2,9 @@
 
 sLink is a URL shortener application designed to make long URLs easier to manage and share. This project is built using Node.js and Express, and can be easily run using Docker or npm.
 
+![Dependencies](https://shieldz-badgegen.azurewebsites.net/github/dependents-pkg/micromatch/micromatch)
+
+
 ## Table of Contents
 
 - [Features](#features)
